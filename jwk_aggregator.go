@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: MIT
 
 package main
 
@@ -42,28 +42,36 @@ func (r registerer) registerHandlers(_ context.Context, extra map[string]interfa
         originStrings[i], _ = v.(string)
     }
     cacheEnabled, _ := config["cache"].(bool)
+    port, _ := config["port"].(float64)
 
     // Initialize the cache and refresh if enabled
     if cacheEnabled {
         go cacheRefresher(originStrings, 15*time.Minute)
     }
 
+    // Start the JWK server on the specified port
+    go func() {
+        http.HandleFunc("/", func(w http.ResponseWriter, req *http.Request) {
+            keys, err := fetchKeys(originStrings)
+            if err != nil {
+                http.Error(w, err.Error(), http.StatusInternalServerError)
+                return
+            }
+
+            w.Header().Set("Content-Type", "application/json")
+            json.NewEncoder(w).Encode(keys)
+        })
+
+        logger.Info("Starting JWK server on port %d", int(port))
+        err := http.ListenAndServe(fmt.Sprintf(":%d", int(port)), nil)
+        if err != nil {
+            logger.Fatal(err)
+        }
+    }()
+
     // Return the actual handler wrapping or your custom logic so it can be used as a replacement for the default HTTP handler
     return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-        if req.URL.Path != "/jwk-aggregator" {
-            h.ServeHTTP(w, req)
-            return
-        }
-
-        keys, err := fetchKeys(originStrings)
-        if err != nil {
-            http.Error(w, err.Error(), http.StatusInternalServerError)
-            return
-        }
-
-        w.Header().Set("Content-Type", "application/json")
-        json.NewEncoder(w).Encode(keys)
-        logger.Debug("request:", req.URL.Path)
+        h.ServeHTTP(w, req)
     }), nil
 }
 
